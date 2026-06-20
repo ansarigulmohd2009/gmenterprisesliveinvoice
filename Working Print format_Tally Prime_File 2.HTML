@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Production Tax Invoice & Live Tally Stream Engine</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body { background-color: #F1F5F9; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; overflow-x: hidden; }
+        .control-panel { background: white; border-right: 1px solid #E2E8F0; min-height: 100vh; padding: 25px; }
+        .preview-pane { height: 100vh; position: sticky; top: 0; background: #475569; overflow-y: auto; padding: 30px 20px; }
+        .table-input { border: 1px solid #CBD5E1; border-radius: 4px; padding: 4px 8px; width: 100%; font-size: 0.825rem; }
+        .table-input:focus { outline: none; border-color: #2563EB; box-shadow: 0 0 0 2px rgba(37,99,235,0.15); }
+        .form-label { font-weight: 600; color: #475569; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+        
+        /* High-Fidelity Sandbox Tally Engine Emulation Styling Grid Layouts */
+        .tally-sandbox-wrapper { background: white; width: 100%; max-width: 190mm; margin: 0 auto; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.3); padding: 10mm; font-family: 'Arial', 'Helvetica', sans-serif; font-size: 11px; color: #000; line-height: 1.3; }
+        .tally-preview-box { border: 2px solid #000; border-collapse: collapse; width: 100%; }
+        .tally-preview-box td { vertical-align: top; padding: 4px; }
+        .b-right { border-right: 1px solid #000; }
+        .b-bottom { border-bottom: 1px solid #000; }
+        .b-top { border-top: 1px solid #000; }
+        .items-preview-grid { width: 100%; border-collapse: collapse; }
+        .items-preview-grid th { font-weight: bold; font-size: 10px; border-bottom: 1px solid #000; border-right: 1px solid #000; padding: 5px; background: #fff; text-transform: uppercase; text-align: left; }
+        .items-preview-grid th.text-right, .items-preview-grid td.text-right { text-align: right; }
+        .items-preview-grid th.text-center, .items-preview-grid td.text-center { text-align: center; }
+        .items-preview-grid th:last-child, .items-preview-grid td:last-child { border-right: none; }
+        .tally-live-row { height: 22px; }
+        .tally-live-row.empty { height: 26px; }
+        .tax-matrix-summary { width: 100%; border-collapse: collapse; margin-top: 3px; font-size: 10px; }
+        .tax-matrix-summary th, .tax-matrix-summary td { border: 1px solid #000; padding: 3px; }
+        
+        .loading-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15,23,42,0.7); z-index: 9999; display: flex; align-items: center; justify-content: center; color: white; flex-direction: column; }
+        
+        /* Challan Logic Styles: Hides Financial Data if Challan is selected */
+        body.is-challan .financial-col { display: none !important; }
+        body.is-challan .tax-summary-section { display: none !important; }
+    </style>
+</head>
+<body>
+
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="spinner-border text-primary mb-3" style="width: 3rem; height: 3rem;" role="status"></div>
+        <h5 class="fw-bold tracking-wide">Synchronizing Ledger Ecosystem Matrices...</h5>
+        <p class="text-slate-400 small">Connecting securely to active Google Cloud Workspace Architecture Sheets</p>
+    </div>
+
+    <div class="container-fluid p-0">
+        <div class="row g-0">
+            
+            <div class="col-xl-5 col-lg-6 control-panel">
+                <div class="d-flex align-items-center justify-content-between pb-3 mb-4 border-bottom">
+                    <div>
+                        <h5 class="fw-bold text-dark m-0"><i class="bi bi-cpu-fill text-primary"></i> TallyFlow Core ERP</h5>
+                        <small class="text-muted">Production Database Management Console</small>
+                    </div>
+                    <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1"><i class="bi bi-cloud-check-fill"></i> DB Engine Linked</span>
+                </div>
+
+                <form id="masterDataControlForm" onsubmit="event.preventDefault();">
+                    
+                    <div class="row g-2 mb-3">
+                        <div class="col-md-3">
+                            <label class="form-label">Doc Type</label>
+                            <select id="invType" class="form-select form-select-sm border-dark shadow-sm" onchange="toggleDocumentSequenceType()">
+                                <option value="Tax Invoice">Tax Invoice</option>
+                                <option value="Delivery Challan">Delivery Challan</option>
+                                <option value="Proforma Invoice">Proforma Invoice</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Sequence ID</label>
+                            <input type="text" id="invNo" class="form-control form-control-sm font-monospace text-primary fw-bold bg-light" readonly>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Posting Date</label>
+                            <input type="date" id="invDate" class="form-control form-control-sm" onchange="fireLivePreviewPipeline()" required>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label text-primary">Challan No.</label>
+                            <input type="text" id="challanNo" class="form-control form-control-sm" placeholder="Optional" oninput="fireLivePreviewPipeline()">
+                        </div>
+                    </div>
+
+                    <div class="card bg-light border-0 rounded-3 p-3 mb-3">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <h6 class="fw-bold text-dark small text-uppercase tracking-wider m-0">Buyer Verification Module</h6>
+                        </div>
+                        <div class="row g-2">
+                            <div class="col-9 position-relative">
+                                <label class="form-label">Live Client Search Lookup</label>
+                                <input type="text" id="custName" class="form-control form-control-sm border-primary" list="buyerAutocompleteDatalist" placeholder="Type Client Name to Intercept Master Record..." oninput="handleBuyerTypeaheadScanning(this.value); fireLivePreviewPipeline();" required>
+                                <datalist id="buyerAutocompleteDatalist"></datalist>
+                            </div>
+                            <div class="col-3 text-center">
+                                <label class="form-label">POS State</label>
+                                <select id="supplyState" class="form-select form-select-sm px-1" onchange="calcTotal()">
+                                    <option value="Maharashtra" data-code="27">27-MH</option>
+                                    <option value="Delhi" data-code="07">07-DL</option>
+                                    <option value="Karnataka" data-code="29">29-KA</option>
+                                    <option value="Gujarat" data-code="24">24-GJ</option>
+                                </select>
+                            </div>
+                            <div class="col-md-12">
+                                <input type="text" id="custGSTIN" class="form-control form-control-sm" placeholder="GSTIN Identifier / Unregistered" oninput="fireLivePreviewPipeline()">
+                            </div>
+                            
+                            <div class="col-md-6">
+                                <input type="text" id="custPhone" class="form-control form-control-sm" placeholder="Billing Phone Number" oninput="fireLivePreviewPipeline()">
+                            </div>
+                            <div class="col-md-6">
+                                <input type="email" id="custEmail" class="form-control form-control-sm" placeholder="Billing Email Address" oninput="fireLivePreviewPipeline()">
+                            </div>
+
+                            <div class="col-md-12">
+                                <textarea id="custAddr" rows="2" class="form-control form-control-sm" placeholder="Full Spatial Location Address Line Strings..." oninput="fireLivePreviewPipeline()" required></textarea>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" id="sameAsBuyer" checked onchange="toggleShippingBox(); fireLivePreviewPipeline();">
+                        <label class="form-check-label small fw-bold text-slate-600" for="sameAsBuyer">Consignee Parameters Match Billing Coordinates</label>
+                    </div>
+                    <div id="shippingFields" class="p-3 bg-light/50 border border-dashed rounded-3 mb-3 d-none">
+                        <label class="form-label text-primary">Consignee Consignment Mapping Target</label>
+                        <input type="text" id="shipName" placeholder="Consignee Trading Entity Name" class="form-control form-control-sm mb-2" oninput="fireLivePreviewPipeline()">
+                        
+                        <div class="row g-2 mb-2">
+                            <div class="col-md-6">
+                                <input type="text" id="shipPhone" placeholder="Consignee Phone" class="form-control form-control-sm" oninput="fireLivePreviewPipeline()">
+                            </div>
+                            <div class="col-md-6">
+                                <input type="email" id="shipEmail" placeholder="Consignee Email" class="form-control form-control-sm" oninput="fireLivePreviewPipeline()">
+                            </div>
+                        </div>
+                        <textarea id="shipAddr" rows="2" placeholder="Destination Shipping Coordinate Address..." class="form-control form-control-sm" oninput="fireLivePreviewPipeline()"></textarea>
+                    </div>
+
+                    <div class="mb-4">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <h6 class="fw-bold text-dark small text-uppercase tracking-wider m-0">Line Items Ledger Stream Grid</h6>
+                            <button type="button" class="btn btn-sm btn-primary py-1 px-2" onclick="addRow()"><i class="bi bi-plus-circle-fill"></i> Add Inventory Row</button>
+                        </div>
+                        <div class="table-responsive" style="max-height: 250px; overflow-y: auto;">
+                            <table class="table table-bordered align-middle bg-white small shadow-sm">
+                                <thead class="table-dark sticky-top">
+                                    <tr>
+                                        <th width="45%">Description of Commodities</th>
+                                        <th width="15%">HSN</th>
+                                        <th width="12%">Qty</th>
+                                        <th width="16%" class="financial-col">Rate</th>
+                                        <th width="12%" class="financial-col">Tax</th>
+                                        <th width="5%"></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="itemTableBody">
+                                    <tr>
+                                        <td><input type="text" class="table-input item-name" placeholder="Item/Service Framework" oninput="fireLivePreviewPipeline()" required></td>
+                                        <td><input type="text" class="table-input item-hsn text-center font-monospace" placeholder="8517" oninput="fireLivePreviewPipeline()" required></td>
+                                        <td><input type="number" class="table-input item-qty text-end" value="1" min="0" oninput="calcTotal()"></td>
+                                        <td class="financial-col"><input type="number" class="table-input item-rate text-end" value="0.00" step="0.01" oninput="calcTotal()"></td>
+                                        <td class="financial-col">
+                                            <select class="table-input item-tax" onchange="calcTotal()">
+                                                <option value="18">18%</option>
+                                                <option value="28">28%</option>
+                                                <option value="12">12%</option>
+                                                <option value="5">5%</option>
+                                                <option value="0">0%</option>
+                                            </select>
+                                        </td>
+                                        <td class="text-center"><button type="button" class="btn btn-link text-danger p-0 m-0 border-0" onclick="this.closest('tr').remove(); calcTotal();"><i class="bi bi-trash3-fill"></i></button></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="p-3 bg-slate-900 text-white rounded-3 d-flex justify-content-between align-items-center">
+                        <div class="d-flex flex-column financial-col">
+                            <span class="text-slate-400 small text-uppercase tracking-widest font-semibold" style="font-size:0.65rem;">Active Workspace Grand Total</span>
+                            <h4 class="fw-bold text-warning m-0" id="consoleGrandTotalDisplay">₹0.00</h4>
+                        </div>
+                        <div class="d-flex gap-2 ms-auto">
+                            <button type="button" class="btn btn-outline-light font-semibold shadow-sm px-3" onclick="compileAndPrintTally()"><i class="bi bi-printer-fill"></i> Print / Save PDF</button>
+                            <button type="button" id="btnCommitToCloud" class="btn btn-warning font-semibold shadow-sm px-3" onclick="commitEcosystemDocumentToSheets()"><i class="bi bi-cloud-arrow-up-fill"></i> Commit to Cloud</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+
+            <div class="col-xl-7 col-lg-6 preview-pane d-none d-lg-block">
+                <div class="text-center mb-3">
+                    <span class="text-white small tracking-widest text-uppercase bg-slate-800/60 rounded-pill px-3 py-1 border border-slate-700/50"><i class="bi bi-eye-fill text-warning"></i> Real-Time Vector Compilation Sandbox Viewport</span>
+                </div>
+                
+                <div class="tally-sandbox-wrapper">
+                    <div id="liveSandboxInvType" class="text-center bold uppercase" style="font-size: 14px; letter-spacing: 0.5px; margin-bottom: 3px;">TAX INVOICE</div>
+                    
+                    <table class="tally-preview-box" cellpadding="0" cellspacing="0">
+                        <tr class="b-bottom" style="height: 75px;">
+                            <td width="50%" class="b-right">
+                                <div class="bold" id="lblPreviewCompName" style="font-size: 12px;">GULMOHD INFRASTRUCTURE PVT LTD</div>
+                                <div id="lblPreviewCompAddr" style="margin-top: 3px; color: #111;">401, Corporate Park, Sector 15, CBD Belapur, Navi Mumbai, Maharashtra</div>
+                                <div style="margin-top: 5px;">GSTIN/UIN: <strong id="lblPreviewCompGSTIN">27AAACG1909M1Z8</strong></div>
+                                <div>State Name: <strong id="lblPreviewCompState">Maharashtra</strong>, Code: <strong id="lblPreviewCompStateCode">27</strong></div>
+                                <div>Website: <span id="lblPreviewCompWeb">gmfireenterprises.com</span></div>
+                                <div>E-Mail: <span id="lblPreviewCompMail">billing@gulmohdinfra.com</span></div>
+                            </td>
+                            <td width="50%" style="padding: 0;">
+                                <table width="100%" style="border-collapse: collapse; height: 100%;" cellpadding="0" cellspacing="0">
+                                    <tr class="b-bottom">
+                                        <td class="b-right" width="50%">Invoice No.<br><strong id="lblPreviewInvoiceNo">N/A</strong></td>
+                                        <td width="50%">Dated<br><strong id="lblPreviewInvoiceDate">N/A</strong></td>
+                                    </tr>
+                                    <tr class="b-bottom">
+                                        <td class="b-right">Delivery Note<br><strong>N/A</strong></td>
+                                        <td>Mode/Terms of Payment<br><strong>Immediate Net Banking</strong></td>
+                                    </tr>
+                                    <tr class="b-bottom">
+                                        <td class="b-right">Challan No.<br><strong id="lblPreviewChallanNo">N/A</strong></td>
+                                        <td>Other Reference(s)<br><strong>Corporate Order Row</strong></td>
+                                    </tr>
+                                    <tr>
+                                        <td class="b-right">Destination State<br><strong id="lblPreviewDestState">N/A</strong></td>
+                                        <td>State Code<br><strong id="lblPreviewDestStateCode">N/A</strong></td>
+                                    </tr>
+                                </table>
+                            </td>
+                        </tr>
+
+                        <tr class="b-bottom" style="height: 85px;">
+                            <td class="b-right">
+                                <div style="font-size: 9px; text-transform: uppercase; color: #444;">Consignee (Ship To)</div>
+                                <div class="bold" id="lblPreviewShipName" style="margin-top: 2px;">N/A</div>
+                                <div id="lblPreviewShipAddr" style="white-space: pre-line; margin-bottom:4px;">N/A</div>
+                                <div>Phone: <strong id="lblPreviewShipPhone">N/A</strong></div>
+                                <div>Email: <strong id="lblPreviewShipEmail">N/A</strong></div>
+                            </td>
+                            <td>
+                                <div style="font-size: 9px; text-transform: uppercase; color: #444;">Buyer (Bill To)</div>
+                                <div class="bold" id="lblPreviewBuyerName" style="margin-top: 2px;">N/A</div>
+                                <div id="lblPreviewBuyerAddr" style="white-space: pre-line; margin-bottom:4px;">N/A</div>
+                                <div>Phone: <strong id="lblPreviewBuyerPhone">N/A</strong></div>
+                                <div>Email: <strong id="lblPreviewBuyerEmail">N/A</strong></div>
+                                <div style="margin-top: 3px;">Buyer's GSTIN/UIN: <strong id="lblPreviewBuyerGSTIN">N/A</strong></div>
+                            </td>
+                        </tr>
+
+                        <tr>
+                            <td colspan="2" style="padding: 0;">
+                                <table class="items-preview-grid">
+                                    <thead>
+                                        <tr>
+                                            <th width="5%" class="text-center">Sl</th>
+                                            <th id="previewDescHeader" width="45%">Description of Goods</th>
+                                            <th width="10%" class="text-center">HSN/SAC</th>
+                                            <th width="12%" class="text-right">Quantity</th>
+                                            <th width="10%" class="text-right financial-col">Rate</th>
+                                            <th width="6%" class="text-center">per</th>
+                                            <th width="12%" class="text-right financial-col">Amount</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="liveSandboxItemRowsContainer">
+                                        </tbody>
+                                </table>
+                            </td>
+                        </tr>
+
+                        <tr class="b-top b-bottom tax-summary-section">
+                            <td colspan="2" style="padding: 6px;">
+                                <div>Amount Chargeable (in words):</div>
+                                <div class="bold" id="lblPreviewAmountInWords" style="font-size: 11px; margin-top: 2px;">INR Zero Rupees Only</div>
+                            </td>
+                        </tr>
+
+                        <tr class="b-bottom tax-summary-section">
+                            <td colspan="2" style="padding: 6px;">
+                                <div class="bold" style="font-size: 9px; text-transform: uppercase; margin-bottom: 2px;">HSN/SAC Tax Summary Details:</div>
+                                <table class="tax-matrix-summary" id="liveSandboxHsnMatrixTable" cellpadding="0" cellspacing="0">
+                                    <thead>
+                                        <tr>
+                                            <th rowspan="2" width="16%">HSN/SAC</th>
+                                            <th rowspan="2" width="16%">Taxable Value</th>
+                                            <th colspan="2" width="22%">Central Tax</th>
+                                            <th colspan="2" width="22%">State Tax</th>
+                                            <th rowspan="2" width="24%">Total Tax Amount</th>
+                                        </tr>
+                                        <tr>
+                                            <th>Rate</th>
+                                            <th>Amount</th>
+                                            <th>Rate</th>
+                                            <th>Amount</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        </tbody>
+                                </table>
+                                <div style="margin-top: 4px; font-size: 10px;">Tax Amount (in words): <span class="bold" id="lblPreviewTaxInWords">INR Zero Rupees Only</span></div>
+                            </td>
+                        </tr>
+
+                        <tr>
+                            <td colspan="2" style="padding: 0;">
+                                <table width="100%" style="border-collapse: collapse;" cellpadding="0" cellspacing="0">
+                                    <tr>
+                                        <td width="55%" class="b-right" style="font-size: 10px; padding: 6px;">
+                                            <div class="bold">Company's Bank Details:</div>
+                                            <div>Bank Name: <strong id="lblPreviewBankName">N/A</strong></div>
+                                            <div>A/c No: <strong id="lblPreviewBankAccount">N/A</strong></div>
+                                            <div>Branch & IFSC: <strong id="lblPreviewBankIFSC">N/A</strong></div>
+                                            
+                                            <div class="bold" style="margin-top: 8px; font-size: 9px;">Declaration:</div>
+                                            <div style="font-size: 9px; color: #222; text-align: justify;">
+                                                We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct. Goods once sold will not be taken back or exchanged.
+                                            </div>
+                                        </td>
+                                        <td width="45%" style="text-align: right; padding: 6px; display: flex; flex-direction: column; justify-content: space-between; height: 95px;">
+                                            <div style="font-size: 10px;">For <strong id="lblPreviewFooterCompName">N/A</strong></div>
+                                            <div style="font-weight: bold; text-transform: uppercase; font-size: 10px; border-top: 1px dashed #000; padding-top: 4px; width: 160px; text-align: center; align-self: flex-end; margin-top: 55px;">Authorized Signatory</div>
+                                        </td>
+                                    </tr>
+                                </table>
+                            </td>
+                        </tr>
+                    </table>
+                    <div class="text-center bold" style="font-size: 10px; margin-top: 4px; text-transform: uppercase; letter-spacing: 1px;">This is a Computer Generated Document</div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // CRITICAL PRODUCTION CONFIGURATION: Replace this with your exact active Google Deployment URL endpoint
+        const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbw4mPqH368QjOIJQI6-cobroYKE9Ci3ULQBcKQonDF-CLEc4k2HRVfors86C2FHw_Vy/exec";
+
+        let cachedBuyersDatabase = [];
+        let indexInvoiceSequenceCount = 0;
+        let indexChallanSequenceCount = 0;
+        let documentCurrentYear = "2026";
+        let globalTotals = { sub: 0, tax: 0, total: 0, taxMap: {}, isLocal: true };
+
+        const COMPANY_PROFILE = {
+            name: "GULMOHD INFRASTRUCTURE PVT LTD",
+            address: "401, Corporate Park, Sector 15, CBD Belapur, Navi Mumbai, Maharashtra",
+            gstin: "27AAACG1909M1Z8",
+            pan: "AAACG1909M",
+            state: "Maharashtra",
+            stateCode: "27",
+            phone: "+91 98765 43210",
+            website: "gmfireenterprises.com",
+            email: "billing@gulmohdinfra.com",
+            bank: "HDFC BANK LTD",
+            account: "50200049182745",
+            ifsc: "HDFC0000026",
+            branch: "CBD Belapur Branch"
+        };
+
+        window.onload = async function() {
+            document.getElementById('invDate').valueAsDate = new Date();
+            hydrateCompanyStaticBlueprintFields();
+            await triggerDatabaseSynchronizationEcosystem();
+            fireLivePreviewPipeline();
+        };
+
+        function hydrateCompanyStaticBlueprintFields() {
+            document.getElementById('lblPreviewCompName').innerText = COMPANY_PROFILE.name;
+            document.getElementById('lblPreviewCompAddr').innerText = COMPANY_PROFILE.address;
+            document.getElementById('lblPreviewCompGSTIN').innerText = COMPANY_PROFILE.gstin;
+            document.getElementById('lblPreviewCompState').innerText = COMPANY_PROFILE.state;
+            document.getElementById('lblPreviewCompStateCode').innerText = COMPANY_PROFILE.stateCode;
+            document.getElementById('lblPreviewCompWeb').innerText = COMPANY_PROFILE.website;
+            document.getElementById('lblPreviewCompMail').innerText = COMPANY_PROFILE.email;
+            document.getElementById('lblPreviewBankName').innerText = COMPANY_PROFILE.bank;
+            document.getElementById('lblPreviewBankAccount').innerText = COMPANY_PROFILE.account;
+            document.getElementById('lblPreviewBankIFSC').innerText = COMPANY_PROFILE.branch + " & " + COMPANY_PROFILE.ifsc;
+            document.getElementById('lblPreviewFooterCompName').innerText = COMPANY_PROFILE.name;
+        }
+
+        async function triggerDatabaseSynchronizationEcosystem() {
+            toggleLoadingOverlay(true);
+            try {
+                const response = await fetch(WEB_APP_URL, {
+                    method: "POST",
+                    mode: "cors",
+                    headers: { "Content-Type": "text/plain;charset=utf-8" },
+                    body: JSON.stringify({ action: "getCoreDatabase" })
+                });
+                const responseData = await response.json();
+                
+                if (responseData.status === "SUCCESS") {
+                    cachedBuyersDatabase = responseData.data.buyers;
+                    indexInvoiceSequenceCount = responseData.data.nextInvoiceIndex;
+                    indexChallanSequenceCount = responseData.data.nextChallanIndex;
+                    documentCurrentYear = responseData.data.currentYear || "2026";
+                    
+                    rebuildAutocompleteDatalistDOM();
+                    toggleDocumentSequenceType();
+                } else {
+                    alert("Ecosystem Mapping Failure Alert: " + responseData.message);
+                }
+            } catch (err) {
+                console.error("Network Layer Database Sync Error: ", err);
+            } finally {
+                toggleLoadingOverlay(false);
+            }
+        }
+
+        function rebuildAutocompleteDatalistDOM() {
+            const listContainer = document.getElementById('buyerAutocompleteDatalist');
+            listContainer.innerHTML = "";
+            cachedBuyersDatabase.forEach(buyer => {
+                const opt = document.createElement('option');
+                opt.value = buyer.name;
+                listContainer.appendChild(opt);
+            });
+        }
+
+        function handleBuyerTypeaheadScanning(inputStringValue) {
+            const match = cachedBuyersDatabase.find(b => b.name.toLowerCase().trim() === inputStringValue.toLowerCase().trim());
+            if (match) {
+                document.getElementById('custGSTIN').value = match.gstin;
+                document.getElementById('custAddr').value = match.address;
+                document.getElementById('custPhone').value = match.phone || "";
+                document.getElementById('custEmail').value = match.email || "";
+                
+                if (match.gstin && match.gstin.substring(0,2) !== "27" && match.gstin.length >= 15) {
+                    const extractedGstinCode = match.gstin.substring(0,2);
+                    const stateSelect = document.getElementById('supplyState');
+                    for (let i=0; i<stateSelect.options.length; i++) {
+                        if (stateSelect.options[i].getAttribute('data-code') === extractedGstinCode) {
+                            stateSelect.selectedIndex = i;
+                            break;
+                        }
+                    }
+                } else {
+                    document.getElementById('supplyState').value = "Maharashtra";
+                }
+                calcTotal();
+            }
+        }
+
+        function toggleDocumentSequenceType() {
+            const type = document.getElementById('invType').value;
+            document.getElementById('liveSandboxInvType').innerText = type;
+            
+            // CHALLAN LOGIC OVERRIDE
+            if (type === "Delivery Challan") {
+                document.body.classList.add('is-challan');
+                document.getElementById('invNo').value = `CHL/${documentCurrentYear}/` + String(indexChallanSequenceCount + 1).padStart(5, '0');
+            } else {
+                document.body.classList.remove('is-challan');
+                if (type === "Tax Invoice") {
+                    document.getElementById('invNo').value = `INV/${documentCurrentYear}/` + String(indexInvoiceSequenceCount + 1).padStart(5, '0');
+                } else {
+                    document.getElementById('invNo').value = `PROF/${documentCurrentYear}/` + String(indexInvoiceSequenceCount + 1).padStart(5, '0');
+                }
+            }
+            fireLivePreviewPipeline();
+        }
+
+        function toggleShippingBox() {
+            const isChecked = document.getElementById('sameAsBuyer').checked;
+            document.getElementById('shippingFields').classList.toggle('d-none', isChecked);
+        }
+
+        function addRow() {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><input type="text" class="table-input item-name" placeholder="Item/Service Framework" oninput="fireLivePreviewPipeline()" required></td>
+                <td><input type="text" class="table-input item-hsn text-center font-monospace" placeholder="8517" oninput="fireLivePreviewPipeline()" required></td>
+                <td><input type="number" class="table-input item-qty text-end" value="1" min="0" oninput="calcTotal()"></td>
+                <td class="financial-col"><input type="number" class="table-input item-rate text-end" value="0.00" step="0.01" oninput="calcTotal()"></td>
+                <td class="financial-col">
+                    <select class="table-input item-tax" onchange="calcTotal()">
+                        <option value="18">18%</option>
+                        <option value="28">28%</option>
+                        <option value="12">12%</option>
+                        <option value="5">5%</option>
+                        <option value="0">0%</option>
+                    </select>
+                </td>
+                <td class="text-center"><button type="button" class="btn btn-link text-danger p-0 m-0 border-0" onclick="this.closest('tr').remove(); calcTotal();"><i class="bi bi-trash3-fill"></i></button></td>
+            `;
+            document.getElementById('itemTableBody').appendChild(tr);
+            fireLivePreviewPipeline();
+        }
+
+        function calcTotal() {
+            let sub = 0;
+            let totalTax = 0;
+            let taxMap = {};
+
+            const supplySelect = document.getElementById('supplyState');
+            const targetState = supplySelect.value;
+            const isLocal = (targetState === COMPANY_PROFILE.state);
+
+            document.querySelectorAll('#itemTableBody tr').forEach(row => {
+                const qty = parseFloat(row.querySelector('.item-qty').value) || 0;
+                const rate = parseFloat(row.querySelector('.item-rate').value) || 0;
+                const taxPct = parseFloat(row.querySelector('.item-tax').value) || 0;
+                const hsn = row.querySelector('.item-hsn').value || "N/A";
+                
+                const itemTaxableAmt = qty * rate;
+                const itemTaxAmt = itemTaxableAmt * (taxPct / 100);
+                
+                sub += itemTaxableAmt;
+                totalTax += itemTaxAmt;
+
+                if (!taxMap[hsn]) {
+                    taxMap[hsn] = { taxable: 0, taxPct: taxPct, taxVal: 0 };
+                }
+                taxMap[hsn].taxable += itemTaxableAmt;
+                taxMap[hsn].taxVal += itemTaxAmt;
+            });
+
+            globalTotals = { sub, tax: totalTax, total: sub + totalTax, taxMap, isLocal };
+
+            document.getElementById('consoleGrandTotalDisplay').innerText = '₹' + globalTotals.total.toFixed(2);
+            fireLivePreviewPipeline();
+        }
+
+        function fireLivePreviewPipeline() {
+            const isChallan = document.getElementById('invType').value === "Delivery Challan";
+            const supplySelect = document.getElementById('supplyState');
+            const destinationState = supplySelect.value;
+            const destinationCode = supplySelect.options[supplySelect.selectedIndex].getAttribute('data-code');
+
+            document.getElementById('lblPreviewInvoiceNo').innerText = document.getElementById('invNo').value;
+            document.getElementById('lblPreviewInvoiceDate').innerText = document.getElementById('invDate').value;
+            document.getElementById('lblPreviewChallanNo').innerText = document.getElementById('challanNo').value || "N/A";
+            document.getElementById('lblPreviewDestState').innerText = destinationState;
+            document.getElementById('lblPreviewDestStateCode').innerText = destinationCode;
+
+            // Buyer / Consignee Assignments
+            const bName = document.getElementById('custName').value || "Cash/Walk-In Customer";
+            document.getElementById('lblPreviewBuyerName').innerText = bName;
+            document.getElementById('lblPreviewBuyerGSTIN').innerText = document.getElementById('custGSTIN').value || "Unregistered";
+            document.getElementById('lblPreviewBuyerAddr').innerText = document.getElementById('custAddr').value || "N/A";
+            document.getElementById('lblPreviewBuyerPhone').innerText = document.getElementById('custPhone').value || "N/A";
+            document.getElementById('lblPreviewBuyerEmail').innerText = document.getElementById('custEmail').value || "N/A";
+
+            const sameAsBuyer = document.getElementById('sameAsBuyer').checked;
+            document.getElementById('lblPreviewShipName').innerText = sameAsBuyer ? bName : document.getElementById('shipName').value || "N/A";
+            document.getElementById('lblPreviewShipAddr').innerText = sameAsBuyer ? document.getElementById('custAddr').value || "N/A" : document.getElementById('shipAddr').value || "N/A";
+            document.getElementById('lblPreviewShipPhone').innerText = sameAsBuyer ? document.getElementById('custPhone').value || "N/A" : document.getElementById('shipPhone').value || "N/A";
+            document.getElementById('lblPreviewShipEmail').innerText = sameAsBuyer ? document.getElementById('custEmail').value || "N/A" : document.getElementById('shipEmail').value || "N/A";
+
+            // Grid Generation
+            document.getElementById('previewDescHeader').width = isChallan ? '67%' : '45%';
+            let rowsHtml = "";
+            let slNo = 1;
+
+            document.querySelectorAll('#itemTableBody tr').forEach(row => {
+                const name = row.querySelector('.item-name').value || "---";
+                const hsn = row.querySelector('.item-hsn').value || "---";
+                const qty = parseFloat(row.querySelector('.item-qty').value) || 0;
+                const rate = parseFloat(row.querySelector('.item-rate').value) || 0;
+                const txVal = qty * rate;
+
+                rowsHtml += `
+                    <tr class="tally-live-row">
+                        <td class="b-right text-center">${slNo++}</td>
+                        <td class="b-right"><strong>${name}</strong></td>
+                        <td class="b-right text-center">${hsn}</td>
+                        <td class="b-right text-right"><strong>${qty} Nos</strong></td>
+                        ${!isChallan ? `<td class="b-right text-right financial-col">${rate.toFixed(2)}</td>` : ''}
+                        <td class="b-right text-center">Nos</td>
+                        ${!isChallan ? `<td class="text-right financial-col"><strong>${txVal.toFixed(2)}</strong></td>` : ''}
+                    </tr>
+                `;
+            });
+
+            if (!isChallan) {
+                if (globalTotals.isLocal) {
+                    const halfTax = (globalTotals.tax / 2).toFixed(2);
+                    rowsHtml += `
+                        <tr class="tally-live-row financial-col"><td class="b-right"></td><td class="b-right">CGST @ ${(globalTotals.tax > 0 ? '9%' : '0%')}</td><td class="b-right"></td><td class="b-right"></td><td class="b-right"></td><td class="b-right"></td><td class="text-right">${halfTax}</td></tr>
+                        <tr class="tally-live-row financial-col"><td class="b-right"></td><td class="b-right">SGST @ ${(globalTotals.tax > 0 ? '9%' : '0%')}</td><td class="b-right"></td><td class="b-right"></td><td class="b-right"></td><td class="b-right"></td><td class="text-right">${halfTax}</td></tr>
+                    `;
+                } else {
+                    rowsHtml += `
+                        <tr class="tally-live-row financial-col"><td class="b-right"></td><td class="b-right">IGST @ ${(globalTotals.tax > 0 ? '18%' : '0%')}</td><td class="b-right"></td><td class="b-right"></td><td class="b-right"></td><td class="b-right"></td><td class="text-right">${globalTotals.tax.toFixed(2)}</td></tr>
+                    `;
+                }
+            }
+
+            const currentCount = document.querySelectorAll('#itemTableBody tr').length + (!isChallan ? 2 : 0);
+            const delta = Math.max(0, 8 - currentCount);
+            for(let i=0; i<delta; i++) {
+                rowsHtml += `<tr class="tally-live-row empty"><td class="b-right"></td><td class="b-right"></td><td class="b-right"></td><td class="b-right"></td>${!isChallan ? '<td class="b-right"></td>' : ''}<td class="b-right"></td>${!isChallan ? '<td></td>' : ''}</tr>`;
+            }
+
+            if (!isChallan) {
+                rowsHtml += `
+                    <tr class="b-top bold financial-col" style="height:24px;">
+                        <td class="b-right"></td><td class="b-right text-right">Total</td><td class="b-right"></td><td class="b-right"></td><td class="b-right"></td><td class="b-right"></td>
+                        <td class="text-right" style="font-size:12px;">₹${globalTotals.total.toFixed(2)}</td>
+                    </tr>
+                `;
+            }
+            document.getElementById('liveSandboxItemRowsContainer').innerHTML = rowsHtml;
+
+            if (!isChallan) {
+                let hsnRowsHtml = "";
+                let subTaxableSum = 0; let subTaxSum = 0;
+                
+                for (let code in globalTotals.taxMap) {
+                    const block = globalTotals.taxMap[code];
+                    subTaxableSum += block.taxable;
+                    subTaxSum += block.taxVal;
+
+                    if (globalTotals.isLocal) {
+                        const rateSplit = (block.taxPct / 2).toFixed(1);
+                        const valSplit = (block.taxVal / 2).toFixed(2);
+                        hsnRowsHtml += `
+                            <tr>
+                                <td class="b-right b-bottom">${code}</td>
+                                <td class="b-right b-bottom text-right">${block.taxable.toFixed(2)}</td>
+                                <td class="b-right b-bottom text-right">${rateSplit}%</td>
+                                <td class="b-right b-bottom text-right">${valSplit}</td>
+                                <td class="b-right b-bottom text-right">${rateSplit}%</td>
+                                <td class="b-right b-bottom text-right">${valSplit}</td>
+                                <td class="text-right b-bottom"><strong>${block.taxVal.toFixed(2)}</strong></td>
+                            </tr>
+                        `;
+                    } else {
+                        hsnRowsHtml += `
+                            <tr>
+                                <td class="b-right b-bottom">${code}</td>
+                                <td class="b-right b-bottom text-right">${block.taxable.toFixed(2)}</td>
+                                <td class="b-right b-bottom text-right">${block.taxPct}%</td>
+                                <td class="b-right b-bottom text-right">${block.taxVal.toFixed(2)}</td>
+                                <td class="b-right b-bottom text-center text-muted" colspan="2">N/A (Interstate)</td>
+                                <td class="text-right b-bottom"><strong>${block.taxVal.toFixed(2)}</strong></td>
+                            </tr>
+                        `;
+                    }
+                }
+
+                hsnRowsHtml += `
+                    <tr class="bold" style="background:#f8fafc;">
+                        <td class="text-center b-right">Total</td>
+                        <td class="text-right b-right">${subTaxableSum.toFixed(2)}</td>
+                        <td class="text-right b-right" colspan="2">${(globalTotals.isLocal ? (subTaxSum/2).toFixed(2) : subTaxSum.toFixed(2))}</td>
+                        <td class="text-right b-right" colspan="2">${(globalTotals.isLocal ? (subTaxSum/2).toFixed(2) : '0.00')}</td>
+                        <td class="text-right">${subTaxSum.toFixed(2)}</td>
+                    </tr>
+                `;
+
+                document.getElementById('liveSandboxHsnMatrixTable').querySelector('tbody').innerHTML = hsnRowsHtml;
+
+                document.getElementById('lblPreviewAmountInWords').innerText = "INR " + convertNumberToWords(globalTotals.total.toFixed(2));
+                document.getElementById('lblPreviewTaxInWords').innerText = "INR " + convertNumberToWords(subTaxSum.toFixed(2));
+            }
+        }
+
+        async function commitEcosystemDocumentToSheets() {
+            const form = document.getElementById('masterDataControlForm');
+            if (!form.checkValidity()) {
+                form.reportValidity();
+                return;
+            }
+
+            const btn = document.getElementById('btnCommitToCloud');
+            btn.disabled = true;
+            btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Processing Commit...`;
+
+            const sameAsBuyer = document.getElementById('sameAsBuyer').checked;
+            const bPhone = document.getElementById('custPhone').value;
+            const bEmail = document.getElementById('custEmail').value;
+
+            const itemsArray = [];
+            document.querySelectorAll('#itemTableBody tr').forEach(row => {
+                itemsArray.push({
+                    description: row.querySelector('.item-name').value,
+                    hsn: row.querySelector('.item-hsn').value,
+                    qty: parseFloat(row.querySelector('.item-qty').value) || 0,
+                    rate: parseFloat(row.querySelector('.item-rate').value) || 0,
+                    taxPercentage: parseFloat(row.querySelector('.item-tax').value) || 0
+                });
+            });
+
+            const transactionDocumentPackage = {
+                action: "commitDocument",
+                documentData: {
+                    type: document.getElementById('invType').value,
+                    docNo: document.getElementById('invNo').value,
+                    challanNo: document.getElementById('challanNo').value,
+                    date: document.getElementById('invDate').value,
+                    supplyState: document.getElementById('supplyState').value,
+                    buyerName: document.getElementById('custName').value,
+                    buyerGstin: document.getElementById('custGSTIN').value,
+                    buyerAddr: document.getElementById('custAddr').value,
+                    buyerPhone: bPhone,
+                    buyerEmail: bEmail,
+                    shipName: sameAsBuyer ? document.getElementById('custName').value : document.getElementById('shipName').value,
+                    shipAddr: sameAsBuyer ? document.getElementById('custAddr').value : document.getElementById('shipAddr').value,
+                    shipPhone: sameAsBuyer ? bPhone : document.getElementById('shipPhone').value,
+                    shipEmail: sameAsBuyer ? bEmail : document.getElementById('shipEmail').value,
+                    subTotal: globalTotals.sub,
+                    taxTotal: globalTotals.tax,
+                    grandTotal: globalTotals.total,
+                    items: itemsArray
+                }
+            };
+
+            try {
+                const req = await fetch(WEB_APP_URL, {
+                    method: "POST",
+                    mode: "cors",
+                    headers: { "Content-Type": "text/plain;charset=utf-8" },
+                    body: JSON.stringify(transactionDocumentPackage)
+                });
+                const res = await req.json();
+
+                if (res.status === "SUCCESS") {
+                    alert(`Ecosystem state database write processed cleanly!\nCommitted to ledger sheet: ${res.data.sheetDestination}`);
+                    await triggerDatabaseSynchronizationEcosystem();
+                } else {
+                    alert("Database Abort Fault Warning: " + res.message);
+                }
+            } catch (err) {
+                alert("Network Core Connectivity Exception Encountered: " + err.toString());
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = `<i class="bi bi-cloud-arrow-up-fill"></i> Commit to Cloud`;
+            }
+        }
+
+        function compileAndPrintTally() {
+            // Naming convention logic for the PDF Save output
+            const pdfName = document.getElementById('lblPreviewShipName').innerText.replace(/[^a-zA-Z0-9 ]/g, "") + " - " + document.getElementById('invNo').value.replace(/\//g, "-");
+            const isChallan = document.getElementById('invType').value === "Delivery Challan";
+            
+            const pWin = window.open('', '_blank');
+            pWin.document.write(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>${pdfName}</title>
+                    <style>
+                        @page { size: A4 portrait; margin: 8mm; }
+                        body { font-family: 'Arial', 'Helvetica', sans-serif; font-size: 11px; color: #000; line-height: 1.3; background: #fff; margin: 0; padding: 0; }
+                        .tally-print-container { width: 190mm; margin: 0 auto; background: #fff; }
+                        .text-center { text-align: center; }
+                        .text-right { text-align: right; }
+                        .bold { font-weight: bold; }
+                        .uppercase { text-transform: uppercase; }
+                        .tally-main-box { border: 2px solid #000; border-collapse: collapse; width: 100%; margin-top: 2px; }
+                        .tally-main-box td { vertical-align: top; padding: 4px; }
+                        .b-right { border-right: 1px solid #000; }
+                        .b-bottom { border-bottom: 1px solid #000; }
+                        .b-top { border-top: 1px solid #000; }
+                        .items-preview-grid { width: 100%; border-collapse: collapse; }
+                        .items-preview-grid th { font-weight: bold; font-size: 10px; border-bottom: 1px solid #000; border-right: 1px solid #000; padding: 5px; background: #fff; text-transform: uppercase; }
+                        .items-preview-grid td { padding: 3px 5px; font-size: 11px; border-right: 1px solid #000; }
+                        .items-preview-grid th:last-child, .items-preview-grid td:last-child { border-right: none; }
+                        .tally-live-row { height: 22px; }
+                        .tally-live-row.empty { height: 26px; }
+                        .tax-matrix-summary { width: 100%; border-collapse: collapse; margin-top: 3px; font-size: 10px; }
+                        .tax-matrix-summary th, .tax-matrix-summary td { border: 1px solid #000; padding: 3px; }
+                        ${isChallan ? '.financial-col { display: none !important; } .tax-summary-section { display: none !important; }' : ''}
+                        @media print { .no-print-toolbar { display: none !important; } body { margin: 0; } }
+                    </style>
+                </head>
+                <body onload="window.print()">
+                    <div class="no-print-toolbar" style="background:#1E293B; padding:12px; text-align:center;">
+                        <button onclick="window.print()" style="padding:8px 24px; background:#10B981; color:white; border:none; border-radius:4px; font-weight:bold; cursor:pointer; font-size:13px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">Save Output as PDF</button>
+                    </div>
+                    <div class="tally-print-container">
+                        <table class="tally-main-box" cellpadding="0" cellspacing="0">
+                            ${document.querySelector('.tally-preview-box').innerHTML}
+                        </table>
+                        <div class="text-center bold" style="font-size: 10px; margin-top: 4px; text-transform: uppercase; letter-spacing: 1px;">This is a Computer Generated Document</div>
+                    </div>
+                </body>
+                </html>
+            `);
+            pWin.document.close();
+        }
+
+        function convertNumberToWords(amount) {
+            let words = new Array();
+            words[0] = ''; words[1] = 'One'; words[2] = 'Two'; words[3] = 'Three'; words[4] = 'Four'; words[5] = 'Five'; words[6] = 'Six'; words[7] = 'Seven'; words[8] = 'Eight'; words[9] = 'Nine'; words[10] = 'Ten'; words[11] = 'Eleven'; words[12] = 'Twelve'; words[13] = 'Thirteen'; words[14] = 'Fourteen'; words[15] = 'Fifteen'; words[16] = 'Sixteen'; words[17] = 'Seventeen'; words[18] = 'Eighteen'; words[19] = 'Nineteen'; words[20] = 'Twenty'; words[30] = 'Thirty'; words[40] = 'Forty'; words[50] = 'Fifty'; words[60] = 'Sixty'; words[70] = 'Seventy'; words[80] = 'Eighty'; words[90] = 'Ninety';
+            amount = amount.toString();
+            let atemp = amount.split(".");
+            let number = atemp[0].split(",").join("");
+            let n_length = number.length;
+            let words_string = "";
+            if (n_length <= 9) {
+                let n_array = new Array(0, 0, 0, 0, 0, 0, 0, 0, 0);
+                let received_n_array = new Array();
+                for (let i = 0; i < n_length; i++) { received_n_array[i] = number.substr(i, 1); }
+                for (let i = 9 - n_length, j = 0; i < 9; i++, j++) { n_array[i] = received_n_array[j]; }
+                for (let i = 0, j = 1; i < 9; i++, j++) {
+                    if (i == 0 || i == 2 || i == 4 || i == 7) {
+                        if (n_array[i] == 1) {
+                            n_array[j] = 10 + parseInt(n_array[j]);
+                            n_array[i] = 0;
+                        }
+                    }
+                }
+                let value = "";
+                for (let i = 0; i < 9; i++) {
+                    if (i == 0 || i == 2 || i == 4 || i == 7) { value = n_array[i] * 10; } else { value = n_array[i]; }
+                    if (value != 0) { words_string += words[value] + " "; }
+                    if ((i == 1 && value != 0) || (i == 0 && value != 0 && n_array[i + 1] == 0)) { words_string += "Crores "; }
+                    if ((i == 3 && value != 0) || (i == 2 && value != 0 && n_array[i + 1] == 0)) { words_string += "Lakhs "; }
+                    if ((i == 5 && value != 0) || (i == 4 && value != 0 && n_array[i + 1] == 0)) { words_string += "Thousands "; }
+                    if (i == 6 && value != 0 && (n_array[i + 1] != 0 || n_array[i + 2] != 0)) { words_string += "Hundred "; }
+                }
+                words_string = words_string.split("  ").join(" ") + "Rupees Only";
+            }
+            return words_string;
+        }
+
+        function toggleLoadingOverlay(displayStateBoolean) {
+            document.getElementById('loadingOverlay').style.display = displayStateBoolean ? "flex" : "none";
+        }
+    </script>
+</body>
+</html>
